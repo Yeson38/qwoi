@@ -6,11 +6,18 @@ on:
 
 permissions:
   contents: read
+  actions: write
+
+# 并发控制：同一选手同一题目不并行
+concurrency:
+  group: judge-${{ github.event.client_payload.player }}-${{ github.event.client_payload.task }}
+  cancel-in-progress: false
 
 jobs:
   judge:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,58 +28,12 @@ jobs:
           python-version: '3.11'
 
       - name: Install deps
-        run: pip install pyyaml
+        run: pip install pyyaml==6.0.2
 
       - name: Prepare source
-        env:
-          LANG_: ${{ github.event.client_payload.lang }}
-          TASK:  ${{ github.event.client_payload.task }}
-          PLAYER: ${{ github.event.client_payload.player }}
-          CODE_B64: ${{ github.event.client_payload.code_base64 }}
-        run: |
-          mkdir -p submissions/$LANG_/$PLAYER
-          echo "$CODE_B64" | base64 -d > submissions/$LANG_/$PLAYER/$TASK.$([ "$LANG_" = "cpp" ] && echo "cpp" || echo "py")
 
-      - name: Judge
-        env:
-          LANG_: ${{ github.event.client_payload.lang }}
-          TASK:  ${{ github.event.client_payload.task }}
-          PLAYER: ${{ github.event.client_payload.player }}
-        run: |
-          EXT=$([ "$LANG_" = "cpp" ] && echo "cpp" || echo "py")
-          python3 scripts/run_tests.py \
-            --lang "$LANG_" --task "$TASK" \
-            --source "submissions/$LANG_/$PLAYER/$TASK.$EXT" \
-            --player "$PLAYER" --out out/result.json
-        continue-on-error: true
+[(doc_common_card_1)]
 
-      - name: Ensure result exists
-        if: always()
-        run: |
-          mkdir -p out
-          if [ ! -f out/result.json ]; then
-            cat > out/result.json <<EOF
-          {"score":0,"verdict":"IE","tests":[],
-           "lang":"${{ github.event.client_payload.lang }}",
-           "task":"${{ github.event.client_payload.task }}",
-           "player":"${{ github.event.client_payload.player }}"}
-          EOF
-          fi
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: result-${{ github.event.client_payload.player }}-${{ github.event.client_payload.task }}
-          path: out/result.json
-          retention-days: 7
-
-      - name: Callback (optional)
-        if: always() && secrets.CALLBACK_URL != ''
-        run: |
-          curl -sS -X POST "${{ secrets.CALLBACK_URL }}" \
-               -H "X-Secret: ${{ secrets.CALLBACK_SECRET }}" \
-               -F "player=${{ github.event.client_payload.player }}" \
-               -F "task=${{ github.event.client_payload.task }}" \
-               -F "lang=${{ github.event.client_payload.lang }}" \
-               -F "result=@out/result.json" \
-               --max-time 30 || echo "callback failed"
+---
+需要我继续输出第三个文件（`.github/workflows/judge.yml`）的完整修改版本吗？
+<websource>inline_action_reply_1</websource>
