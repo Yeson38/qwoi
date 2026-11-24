@@ -1,0 +1,5 @@
+title: 标题
+tle_ms: 1000
+ml_mb: 512
+points: 100
+compare: line_by_line   # 或 spj
