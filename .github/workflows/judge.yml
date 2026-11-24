@@ -1,0 +1,44 @@
+name: Judge
+on:
+  repository_dispatch:
+    types: [judge]
+
+jobs:
+  judge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python (仅 py 赛道需要)
+        if: github.event.client_payload.lang == 'py'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run judge
+        env:
+          LANG_: ${{ github.event.client_payload.lang }}
+          TASK:  ${{ github.event.client_payload.task }}
+          SUB:   ${{ github.event.client_payload.submission }}
+          PLAYER:${{ github.event.client_payload.player }}
+        run: |
+          mkdir -p out
+          python3 scripts/run_tests.py \
+            --lang $LANG_ --task $TASK --sub $SUB \
+            --player "$PLAYER" --out out/result.json
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: result-${{ github.event.client_payload.submission }}
+          path: out/result.json
+
+      - name: Callback
+        if: always()
+        run: |
+          curl -X POST ${{ secrets.CALLBACK_URL }} \
+               -H "X-Secret: ${{ secrets.CALLBACK_SECRET }}" \
+               -F "submission=${{ github.event.client_payload.submission }}" \
+               -F "lang=$LANG_" \
+               -F "result=@out/result.json"
