@@ -1,4 +1,5 @@
 name: Judge
+run-name: "评测 ${{ github.event.client_payload.player }} - ${{ github.event.client_payload.task }} (#${{ github.run_number }})"
 
 on:
   repository_dispatch:
@@ -8,9 +9,9 @@ permissions:
   contents: read
   actions: write
 
-# 并发控制：同一选手同一题目不并行
+# 使用 submission_id 区分不同提交，允许并行评测
 concurrency:
-  group: judge-${{ github.event.client_payload.player }}-${{ github.event.client_payload.task }}
+  group: judge-${{ github.event.client_payload.submission_id || github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -32,14 +33,12 @@ jobs:
 
       - name: Prepare source
         env:
-          # 仅传递必要信息，不暴露 secrets
           PLAYER: ${{ github.event.client_payload.player }}
           TASK: ${{ github.event.client_payload.task }}
           LANG_TYPE: ${{ github.event.client_payload.lang }}
           SOURCE_CONTENT: ${{ github.event.client_payload.source }}
         run: |
           mkdir -p /tmp/judge_src
-          # 根据语言确定文件扩展名
           if [ "$LANG_TYPE" = "cpp" ]; then
             EXT="cpp"
           elif [ "$LANG_TYPE" = "py" ]; then
@@ -48,7 +47,6 @@ jobs:
             echo "不支持的语言: $LANG_TYPE"
             exit 1
           fi
-          # 将源码写入临时文件（base64 解码，避免特殊字符问题）
           echo "$SOURCE_CONTENT" | base64 -d > "/tmp/judge_src/main.$EXT"
           echo "SOURCE_FILE=/tmp/judge_src/main.$EXT" >> $GITHUB_ENV
 
@@ -69,7 +67,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: result-${{ github.event.client_payload.player }}-${{ github.event.client_payload.task }}
+          name: result-${{ github.event.client_payload.player }}-${{ github.event.client_payload.task }}-${{ github.run_number }}
           path: out/result.json
           retention-days: 7
 
@@ -82,33 +80,24 @@ jobs:
             echo "结果文件不存在，跳过评论"
             exit 0
           fi
-          # 提取关键字段
           VERDICT=$(python -c "import json; print(json.load(open('out/result.json'))['verdict'])")
           SCORE=$(python -c "import json; print(json.load(open('out/result.json'))['score'])")
           PLAYER=$(python -c "import json; print(json.load(open('out/result.json'))['player'])")
           TASK=$(python -c "import json; print(json.load(open('out/result.json'))['task'])")
 
-          # 构建评论
-          if [ "$VERDICT" = "AC" ]; then
-            EMOJI=""
-          elif [ "$VERDICT" = "WA" ]; then
-            EMOJI=""
-          elif [ "$VERDICT" = "TLE" ]; then
-            EMOJI="️"
-          elif [ "$VERDICT" = "MLE" ]; then
-            EMOJI=""
-          elif [ "$VERDICT" = "RE" ]; then
-            EMOJI=""
-          elif [ "$VERDICT" = "CE" ]; then
-            EMOJI=""
-          else
-            EMOJI=""
-          fi
+          case "$VERDICT" in
+            AC) EMOJI="" ;;
+            WA) EMOJI="" ;;
+            TLE) EMOJI="️" ;;
+            MLE) EMOJI="" ;;
+            RE) EMOJI="" ;;
+            CE) EMOJI="" ;;
+            *) EMOJI="" ;;
+          esac
 
-          COMMENT="$EMOJI **$PLAYER** - $TASK: $VERDICT ($SCORE 分)"
+          COMMENT="$EMOJI **$PLAYER** - $TASK: $VERDICT ($SCORE 分) | Run #${{ github.run_number }}"
           echo "$COMMENT"
 
-          # 如果有 dispatch 的 issue_number，则在对应 issue 下评论
           ISSUE_NUM="${{ github.event.client_payload.issue_number }}"
           if [ -n "$ISSUE_NUM" ] && [ "$ISSUE_NUM" != "null" ]; then
             gh issue comment "$ISSUE_NUM" --body "$COMMENT" --repo "$GITHUB_REPOSITORY"
