@@ -102,3 +102,13 @@ jobs:
           if [ -n "$ISSUE_NUM" ] && [ "$ISSUE_NUM" != "null" ]; then
             gh issue comment "$ISSUE_NUM" --body "$COMMENT" --repo "$GITHUB_REPOSITORY"
           fi
+      - name: Summary
+        if: always()
+        run: |
+          [ -f out/result.json ] || exit 0
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          r = json.load(open('out/result.json'))
+          print(f"## {r.get('player')} - {r.get('task')}")
+          print(f"**{r.get('verdict')}** / {r.get('score')} 分")
+          PY
