@@ -9,7 +9,6 @@ permissions:
   contents: read
   actions: write
 
-# 使用 submission_id 区分不同提交，允许并行评测
 concurrency:
   group: judge-${{ github.event.client_payload.submission_id || github.run_id }}
   cancel-in-progress: false
@@ -36,20 +35,52 @@ jobs:
           LANG_TYPE: ${{ github.event.client_payload.lang }}
           TASK: ${{ github.event.client_payload.task }}
           PLAYER: ${{ github.event.client_payload.player }}
-          SOURCE: ${{ github.event.client_payload.source }}
+          SOURCE_CONTENT: ${{ github.event.client_payload.source_content }}
           SUBMISSION_ID: ${{ github.event.client_payload.submission_id }}
         run: |
-          mkdir -p /tmp/judge_src
-          if [ "$LANG_TYPE" = "cpp" ]; then
-            EXT="cpp"
-          elif [ "$LANG_TYPE" = "py" ]; then
-            EXT="py"
-          else
-            echo "不支持的语言: $LANG_TYPE"
+          set -euo pipefail
+
+          # 校验参数
+          if [ -z "$LANG_TYPE" ] || [ -z "$TASK" ] || [ -z "$PLAYER" ]; then
+            echo "缺少必要参数: lang/task/player"
             exit 1
           fi
+
+          if [ -z "$SOURCE_CONTENT" ]; then
+            echo "source_content 为空"
+            exit 1
+          fi
+
+          # 校验 task 和 player 只含安全字符，防止路径穿越
+          if ! echo "$TASK" | grep -qE '^[A-Za-z0-9_-]+$'; then
+            echo "非法 task 名: $TASK"
+            exit 1
+          fi
+          if ! echo "$PLAYER" | grep -qE '^[A-Za-z0-9_-]+$'; then
+            echo "非法 player 名: $PLAYER"
+            exit 1
+          fi
+
+          mkdir -p /tmp/judge_src
+
+          case "$LANG_TYPE" in
+            cpp) EXT="cpp" ;;
+            py)  EXT="py" ;;
+            *)
+              echo "不支持的语言: $LANG_TYPE"
+              exit 1
+              ;;
+          esac
+
+          # source_content 应为 base64 编码的源码
           echo "$SOURCE_CONTENT" | base64 -d > "/tmp/judge_src/main.$EXT"
-          echo "SOURCE_FILE=/tmp/judge_src/main.$EXT" >> $GITHUB_ENV
+
+          if [ ! -s "/tmp/judge_src/main.$EXT" ]; then
+            echo "解码后源码为空"
+            exit 1
+          fi
+
+          echo "SOURCE_FILE=/tmp/judge_src/main.$EXT" >> "$GITHUB_ENV"
 
       - name: Run judge
         env:
@@ -57,7 +88,8 @@ jobs:
           TASK: ${{ github.event.client_payload.task }}
           LANG_TYPE: ${{ github.event.client_payload.lang }}
         run: |
-          python scripts/run_tests.py \
+          set -euo pipefail
+          python scripts/judge.py \
             --lang "$LANG_TYPE" \
             --task "$TASK" \
             --source "$SOURCE_FILE" \
@@ -77,23 +109,27 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
+
           if [ ! -f out/result.json ]; then
             echo "结果文件不存在，跳过评论"
             exit 0
           fi
+
           VERDICT=$(python -c "import json; print(json.load(open('out/result.json'))['verdict'])")
           SCORE=$(python -c "import json; print(json.load(open('out/result.json'))['score'])")
           PLAYER=$(python -c "import json; print(json.load(open('out/result.json'))['player'])")
           TASK=$(python -c "import json; print(json.load(open('out/result.json'))['task'])")
 
           case "$VERDICT" in
-            AC) EMOJI="" ;;
-            WA) EMOJI="" ;;
-            TLE) EMOJI="️" ;;
-            MLE) EMOJI="" ;;
-            RE) EMOJI="" ;;
-            CE) EMOJI="" ;;
-            *) EMOJI="" ;;
+            AC)  EMOJI="✅" ;;
+            WA)  EMOJI="❌" ;;
+            TLE) EMOJI="⏱️" ;;
+            MLE) EMOJI="💾" ;;
+            RE)  EMOJI="💥" ;;
+            CE)  EMOJI="🔧" ;;
+            IE)  EMOJI="⚠️" ;;
+            *)   EMOJI="❓" ;;
           esac
 
           COMMENT="$EMOJI **$PLAYER** - $TASK: $VERDICT ($SCORE 分) | Run #${{ github.run_number }}"
@@ -107,7 +143,11 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          [ -f out/result.json ] || { echo "无结果文件，跳过摘要"; exit 0; }
+          set -euo pipefail
+          if [ ! -f out/result.json ]; then
+            echo "无结果文件，跳过摘要"
+            exit 0
+          fi
           {
             echo '```json'
             cat out/result.json
