@@ -33,10 +33,11 @@ jobs:
 
       - name: Prepare source
         env:
-          PLAYER: ${{ github.event.client_payload.player }}
-          TASK: ${{ github.event.client_payload.task }}
           LANG_TYPE: ${{ github.event.client_payload.lang }}
-          SOURCE_CONTENT: ${{ github.event.client_payload.source }}
+          TASK: ${{ github.event.client_payload.task }}
+          PLAYER: ${{ github.event.client_payload.player }}
+          SOURCE: ${{ github.event.client_payload.source }}
+          SUBMISSION_ID: ${{ github.event.client_payload.submission_id }}
         run: |
           mkdir -p /tmp/judge_src
           if [ "$LANG_TYPE" = "cpp" ]; then
