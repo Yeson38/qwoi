@@ -82,6 +82,16 @@ jobs:
 
           echo "SOURCE_FILE=/tmp/judge_src/main.$EXT" >> "$GITHUB_ENV"
 
+      - name: Enable network isolation
+        run: |
+          set -euo pipefail
+          # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor,
+          # which makes `unshare -n -r` fail with EPERM and would silently
+          # disable the judge's network isolation.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          # Fail loudly rather than judge submissions with network access.
+          unshare -n -r true
+
       - name: Run judge
         env:
           PLAYER: ${{ github.event.client_payload.player }}

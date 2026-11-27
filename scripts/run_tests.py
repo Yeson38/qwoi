@@ -37,11 +37,12 @@ _SAFE_NAME_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 
 # 检测 unshare 是否可用（用于断网）
 _HAS_UNSHARE = None
+_UNSHARE_ERR = ""
 
 
 def _check_unshare() -> bool:
     """检测 unshare -n -r 是否可用"""
-    global _HAS_UNSHARE
+    global _HAS_UNSHARE, _UNSHARE_ERR
     if _HAS_UNSHARE is not None:
         return _HAS_UNSHARE
     try:
@@ -51,8 +52,11 @@ def _check_unshare() -> bool:
             timeout=5,
         )
         _HAS_UNSHARE = (r.returncode == 0)
-    except Exception:
+        if not _HAS_UNSHARE:
+            _UNSHARE_ERR = (r.stderr or b"").decode("utf-8", "ignore").strip()[:200]
+    except Exception as e:
         _HAS_UNSHARE = False
+        _UNSHARE_ERR = str(e)[:200]
     return _HAS_UNSHARE
 
 
@@ -413,7 +417,8 @@ def judge(
         if _check_unshare():
             result["network_disabled"] = True
         else:
-            result["warnings"].append("unshare 不可用，无法断网，已降级运行")
+            detail = f": {_UNSHARE_ERR}" if _UNSHARE_ERR else ""
+            result["warnings"].append(f"unshare 不可用，无法断网，已降级运行{detail}")
 
     # 创建临时工作目录
     with tempfile.TemporaryDirectory(prefix="judge_") as workdir:
