@@ -81,7 +81,7 @@ builtins.exec = _forbidden
 builtins.eval = _forbidden
 builtins.compile = _forbidden
 builtins.breakpoint = _forbidden
-builtins.input = _forbidden  # 如果需要 stdin 交互可移除此行
+# builtins.input = _forbidden   如果需要 stdin 交互可移除此行
 
 # ---------- 保护 __builtins__ 字典 ----------
 # 防止通过 __builtins__['exec'] 等方式恢复
