@@ -5,6 +5,14 @@ OJ 评测脚本
 
 断网方案：使用 unshare -n -r 创建独立网络命名空间。
 如果 unshare 不可用，会降级为无断网模式并在结果中记录警告。
+
+配置优先级（高 → 低）：
+  1. 题目配置：problems/<TASK>/meta.yml
+        limits.<lang>.<key>  →  <key>.<lang>  →  <key>
+  2. 语言配置：scripts/lang_spec.py 中 SUPPORTED[lang]["limits"]
+  3. 代码保底：lang_spec.py 末尾的 DEFAULT_* 常量
+
+资源限制中的 0 表示"不设置该限制"（沿用系统行为），不会额外限制系统。
 """
 
 import argparse
@@ -23,17 +31,32 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
-from lang_spec import (
+from lang_spec import (  # noqa: E402
     SUPPORTED,
     DEFAULT_TLE_MS,
     DEFAULT_ML_MB,
     DEFAULT_POINTS,
     DEFAULT_COMPARE,
     DEFAULT_COMPILE_TLE,
+    DEFAULT_FSIZE_MB,
+    DEFAULT_NPROC,
 )
 
 # 安全字符校验正则
 _SAFE_NAME_RE = re.compile(r'^[A-Za-z0-9_-]+$')
+
+# 支持的输出比对方言
+COMPARE_MODES = ("full", "normalize", "line_by_line", "token")
+
+# 判定为内存超限的报错特征（RLIMIT_AS 触发时不会走 SIGKILL 路径）
+_OOM_MARKERS = (
+    b"MemoryError",
+    b"bad_alloc",
+    b"std::bad_alloc",
+    b"Cannot allocate memory",
+    b"cannot allocate memory",
+    b"Out of memory",
+)
 
 # 检测 unshare 是否可用（用于断网）
 _HAS_UNSHARE = None
@@ -61,23 +84,34 @@ def _check_unshare() -> bool:
 
 
 # ==================== 资源限制 ====================
-def set_limits(tle_ms: int, ml_mb: int):
-    """在子进程 exec 前设置资源限制（通过 preexec_fn 调用）"""
+def set_limits(tle_ms: int, ml_mb: int, fsize_mb: int = 0, nproc: int = 0):
+    """
+    在子进程 exec 前设置资源限制（通过 preexec_fn 调用）。
+
+    每一项 <= 0 时跳过，不额外限制系统：
+      ml_mb   <= 0 → 不设置 RLIMIT_AS
+      fsize_mb<= 0 → 不设置 RLIMIT_FSIZE
+      nproc   <= 0 → 不设置 RLIMIT_NPROC（线程/多进程求解可用）
+    """
     import resource
 
     # CPU 时间限制（秒），向上取整
-    cpu_sec = (tle_ms + 999) // 1000
+    cpu_sec = max(1, (tle_ms + 999) // 1000)
     resource.setrlimit(resource.RLIMIT_CPU, (cpu_sec, cpu_sec + 1))
 
     # 地址空间限制
-    ml_bytes = ml_mb * 1024 * 1024
-    resource.setrlimit(resource.RLIMIT_AS, (ml_bytes, ml_bytes))
+    if ml_mb and ml_mb > 0:
+        ml_bytes = ml_mb * 1024 * 1024
+        resource.setrlimit(resource.RLIMIT_AS, (ml_bytes, ml_bytes))
 
-    # 文件大小限制（禁止写大文件）
-    resource.setrlimit(resource.RLIMIT_FSIZE, (10 * 1024 * 1024, 10 * 1024 * 1024))
+    # 单文件写入大小限制
+    if fsize_mb and fsize_mb > 0:
+        fsize_bytes = fsize_mb * 1024 * 1024
+        resource.setrlimit(resource.RLIMIT_FSIZE, (fsize_bytes, fsize_bytes))
 
-    # 禁止创建子进程（防止 fork 炸弹）
-    resource.setrlimit(resource.RLIMIT_NPROC, (0, 0))
+    # 进程/线程数限制
+    if nproc and nproc > 0:
+        resource.setrlimit(resource.RLIMIT_NPROC, (nproc, nproc))
 
     # 核心转储关闭
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
@@ -115,17 +149,12 @@ def compare_output(got: str, want: str, mode: str) -> bool:
     比对输出。
     模式：
       - full:       完全一致（含空格换行）
-      - normalize:  去掉行尾空格和末尾空行后比较
+      - normalize:  去掉行尾空格和末尾空行后比较（默认）
       - line_by_line: 逐行比较，行内连续空白折叠为单个空格
       - token:      按空白分词后逐 token 比较
     """
     if mode == "full":
         return got == want
-
-    if mode == "normalize":
-        g = "\n".join(line.rstrip() for line in _split_lines(got))
-        w = "\n".join(line.rstrip() for line in _split_lines(want))
-        return g == w
 
     if mode == "line_by_line":
         g = [" ".join(line.split()) for line in _split_lines(got)]
@@ -135,66 +164,97 @@ def compare_output(got: str, want: str, mode: str) -> bool:
     if mode == "token":
         return got.split() == want.split()
 
-    # 默认 normalize
+    # full / normalize / 未知模式都退化为 normalize
     g = "\n".join(line.rstrip() for line in _split_lines(got))
     w = "\n".join(line.rstrip() for line in _split_lines(want))
     return g == w
 
 
 # ==================== meta.yml 加载 ====================
-def load_meta(problems_dir: str, lang: str) -> dict:
+_INT_KEYS = ("tle_ms", "ml_mb", "points", "compile_tle", "fsize_mb", "nproc")
+
+
+def _language_default(lang: str, key: str, fallback):
+    """第 2 层：lang_spec.py 中该语言的默认值"""
+    conf = SUPPORTED.get(lang) or {}
+    limits = conf.get("limits")
+    if isinstance(limits, dict) and key in limits:
+        return limits[key]
+    return fallback
+
+
+def _resolve(cfg: dict, lang: str, key: str, fallback):
     """
-    读取 meta.yml，返回限制配置。
-    支持语言级别覆盖：
-      tle_ms / ml_mb / points / compare 可以是标量或 dict（按语言分）。
+    按“题目 > 语言 > 代码保底”解析单个配置项。
+
+    题目配置支持两种写法（同时存在时 <key>.<lang> 优先于 limits.<lang>.<key>？否：
+    limits.<lang>.<key> 更具体，优先）：
+      limits:
+        cpp:
+          tle_ms: 2000
+      tle_ms:
+        cpp: 2000
+      tle_ms: 1000          # 全局，对未单独指定该语言的情况生效
     """
+    if isinstance(cfg, dict):
+        limits = cfg.get("limits")
+        if isinstance(limits, dict):
+            per_lang = limits.get(lang)
+            if isinstance(per_lang, dict) and key in per_lang:
+                return per_lang[key]
+
+        val = cfg.get(key)
+        if isinstance(val, dict):
+            if lang in val:
+                return val[lang]
+        elif val is not None:
+            return val
+
+    return _language_default(lang, key, fallback)
+
+
+def load_meta(problem_dir: str, lang: str) -> dict:
+    """读取 meta.yml，按优先级返回生效的限制与评分配置。"""
     meta = {
         "tle_ms": DEFAULT_TLE_MS,
         "ml_mb": DEFAULT_ML_MB,
         "points": DEFAULT_POINTS,
         "compare": DEFAULT_COMPARE,
+        "compile_tle": DEFAULT_COMPILE_TLE,
+        "fsize_mb": DEFAULT_FSIZE_MB,
+        "nproc": DEFAULT_NPROC,
     }
 
-    meta_path = os.path.join(problems_dir, "meta.yml")
-    if not os.path.exists(meta_path):
-        return meta
+    cfg = {}
+    meta_path = os.path.join(problem_dir, "meta.yml")
+    if os.path.exists(meta_path):
+        try:
+            import yaml
+            with open(meta_path, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+        except ImportError:
+            print("[WARN] 未安装 pyyaml，忽略 meta.yml", file=sys.stderr)
+        except Exception as e:
+            print(f"[WARN] 读取 meta.yml 失败: {e}", file=sys.stderr)
+    if not isinstance(cfg, dict):
+        cfg = {}
 
-    try:
-        import yaml
-        with open(meta_path, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
-    except Exception as e:
-        print(f"[WARN] 读取 meta.yml 失败: {e}", file=sys.stderr)
-        return meta
+    for key in _INT_KEYS:
+        try:
+            meta[key] = int(_resolve(cfg, lang, key, meta[key]))
+        except (TypeError, ValueError):
+            pass
 
-    def _resolve(key, default):
-        val = cfg.get(key, default)
-        if isinstance(val, dict):
-            val = val.get(lang, default)
-        return val
-
-    try:
-        meta["tle_ms"] = int(_resolve("tle_ms", DEFAULT_TLE_MS))
-    except (ValueError, TypeError):
-        pass
-    try:
-        meta["ml_mb"] = int(_resolve("ml_mb", DEFAULT_ML_MB))
-    except (ValueError, TypeError):
-        pass
-    try:
-        meta["points"] = int(_resolve("points", DEFAULT_POINTS))
-    except (ValueError, TypeError):
-        pass
-
-    cmp_val = _resolve("compare", DEFAULT_COMPARE)
-    if isinstance(cmp_val, str) and cmp_val in ("full", "normalize", "line_by_line", "token"):
+    cmp_val = _resolve(cfg, lang, "compare", DEFAULT_COMPARE)
+    if isinstance(cmp_val, str) and cmp_val in COMPARE_MODES:
         meta["compare"] = cmp_val
 
     return meta
 
 
 # ==================== 编译 ====================
-def compile_src(lang: str, src: str, workdir: str, binary: str) -> dict:
+def compile_src(lang: str, src: str, workdir: str, binary: str,
+                compile_tle: int = DEFAULT_COMPILE_TLE) -> dict:
     """编译源文件，返回 {ok, msg}"""
     conf = SUPPORTED.get(lang)
     if conf is None:
@@ -206,7 +266,7 @@ def compile_src(lang: str, src: str, workdir: str, binary: str) -> dict:
             r = subprocess.run(
                 [sys.executable, "-m", "py_compile", src],
                 capture_output=True,
-                timeout=DEFAULT_COMPILE_TLE,
+                timeout=compile_tle,
                 cwd=workdir,
                 env=_clean_env(workdir),
             )
@@ -227,7 +287,7 @@ def compile_src(lang: str, src: str, workdir: str, binary: str) -> dict:
         r = subprocess.run(
             cmd,
             capture_output=True,
-            timeout=conf.get("compile_tle", DEFAULT_COMPILE_TLE),
+            timeout=compile_tle,
             cwd=workdir,
             env=_clean_env(workdir, for_compile=True),
         )
@@ -244,6 +304,11 @@ def compile_src(lang: str, src: str, workdir: str, binary: str) -> dict:
 
 
 # ==================== 运行 ====================
+def _looks_like_oom(stderr: bytes) -> bool:
+    """判断进程是否因内存上限而失败（RLIMIT_AS 不会触发 SIGKILL）"""
+    return any(marker in stderr for marker in _OOM_MARKERS)
+
+
 def run_one(
     lang: str,
     binary: str,
@@ -253,6 +318,8 @@ def run_one(
     ml_mb: int,
     workdir: str,
     use_network: bool = False,
+    fsize_mb: int = 0,
+    nproc: int = 0,
 ) -> dict:
     """
     运行一次测试。
@@ -291,10 +358,11 @@ def run_one(
             cmd,
             input=stdin_data,
             capture_output=True,
-            timeout=tle_ms / 1000.0 + 0.5,  # 留一点余量
+            # wall clock 上限就是 tle_ms 本身，不再额外放宽
+            timeout=tle_ms / 1000.0,
             cwd=workdir,
             env=_clean_env(workdir),
-            preexec_fn=lambda: set_limits(tle_ms, ml_mb),
+            preexec_fn=lambda: set_limits(tle_ms, ml_mb, fsize_mb, nproc),
         )
         elapsed_ms = int((time.perf_counter() - start) * 1000)
 
@@ -303,19 +371,23 @@ def run_one(
         exit_code = r.returncode
         if exit_code < 0:
             sig = -exit_code
-            # SIGXCPU(24) = CPU 超时
-            # SIGKILL(9)  = 可能被 OOM killer 杀
-            # SIGSEGV(11) = 段错误
-            # SIGABRT(6)  = abort
-            if sig in (signal.SIGXCPU, signal.SIGALRM):
-                verdict = "TLE"
-            elif sig == signal.SIGKILL:
-                # 可能是 MLE 或 OOM
-                verdict = "MLE"
-            else:
-                verdict = "RE"
+
+        # 判定顺序：CPU 超时信号 > OOM > 其他信号 > 非零退出 > wall 超时
+        if sig in (signal.SIGXCPU, signal.SIGALRM):
+            verdict = "TLE"
+        elif sig == signal.SIGKILL:
+            # 被 OOM killer 杀掉时只可能是内存问题
+            verdict = "MLE"
+        elif _looks_like_oom(r.stderr):
+            # RLIMIT_AS 触发的是 bad_alloc / MemoryError / SIGABRT，不是 SIGKILL
+            verdict = "MLE"
+        elif sig != 0:
+            verdict = "RE"
         elif exit_code != 0:
             verdict = "RE"
+        elif elapsed_ms > tle_ms:
+            # 0 CPU 的等待（sleep、阻塞 IO）只能靠 wall clock 抓
+            verdict = "TLE"
         else:
             verdict = "OK"
 
@@ -375,6 +447,7 @@ def judge(
         "max_time_ms": 0,
         "network_disabled": False,
         "warnings": [],
+        "limits": {},
     }
 
     # 参数校验
@@ -404,13 +477,24 @@ def judge(
         _write_result(result, out_path)
         return
 
-    # 读取 meta
+    # 读取 meta（题目 > 语言 > 代码保底）
     meta = load_meta(task_dir, lang)
     tle_ms = meta["tle_ms"]
     ml_mb = meta["ml_mb"]
     points = meta["points"]
     compare_mode = meta["compare"]
+    compile_tle = meta["compile_tle"]
+    fsize_mb = meta["fsize_mb"]
+    nproc = meta["nproc"]
     result["total_score"] = points
+    result["limits"] = {
+        "tle_ms": tle_ms,
+        "ml_mb": ml_mb,
+        "compile_tle": compile_tle,
+        "fsize_mb": fsize_mb,
+        "nproc": nproc,
+        "compare": compare_mode,
+    }
 
     # 断网检测
     if not use_network:
@@ -429,7 +513,7 @@ def judge(
 
         # 编译
         binary = os.path.join(workdir, "main")
-        compile_result = compile_src(lang, src_in_work, workdir, binary)
+        compile_result = compile_src(lang, src_in_work, workdir, binary, compile_tle)
         if not compile_result["ok"]:
             result["verdict"] = "CE"
             result["compile_msg"] = compile_result["msg"]
@@ -469,7 +553,7 @@ def judge(
             with open(in_path, "rb") as f:
                 stdin_data = f.read()
 
-            # 读取期望输出
+            # 读取期望输出（不存在则视为空答案）
             want = ""
             if os.path.exists(ans_path):
                 with open(ans_path, "r", encoding="utf-8") as f:
@@ -485,6 +569,8 @@ def judge(
                 ml_mb=ml_mb,
                 workdir=workdir,
                 use_network=use_network,
+                fsize_mb=fsize_mb,
+                nproc=nproc,
             )
 
             total_time += run_result["time_ms"]
@@ -500,15 +586,7 @@ def judge(
                     test_score = per_test_score
                 else:
                     test_verdict = "WA"
-            elif test_verdict == "RE":
-                # 运行错误
-                test_verdict = "RE"
-            elif test_verdict == "TLE":
-                test_verdict = "TLE"
-            elif test_verdict == "MLE":
-                test_verdict = "MLE"
-            else:
-                test_verdict = "IE"
+            # TLE / MLE / RE / IE 直接沿用
 
             result["tests"].append({
                 "name": test_name,
@@ -518,7 +596,7 @@ def judge(
                 "signal": run_result["signal"],
             })
 
-            # 非 AC 则停止（可选：改为 continue 可跑完所有测试）
+            # 非 AC 则停止（改为 continue 可跑完所有测试）
             if test_verdict != "AC":
                 break
 
@@ -528,7 +606,7 @@ def judge(
         result["max_time_ms"] = max_time
 
         # 最终判定
-        if all(t["verdict"] == "AC" for t in result["tests"]):
+        if result["tests"] and all(t["verdict"] == "AC" for t in result["tests"]):
             result["verdict"] = "AC"
         else:
             # 取第一个非 AC 的 verdict
@@ -541,7 +619,7 @@ def judge(
 
 
 def _write_result(result: dict, out_path: str):
-    """写出结果 JSON"""
+    """写出结果 JSON（同时打印到标准输出）"""
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
@@ -553,11 +631,11 @@ def main():
     parser = argparse.ArgumentParser(description="OJ 评测脚本")
     parser.add_argument("--lang", required=True, choices=list(SUPPORTED.keys()),
                         help="语言: cpp / py")
-    parser.add_argument("--task", required=True, help="题目名")
-    parser.add_argument("--player", required=True, help="选手名")
+    parser.add_argument("--task", required=True, help="题目名（problems/ 下的目录名）")
+    parser.add_argument("--player", required=True, help="选手名（仅字母数字下划线短横线）")
     parser.add_argument("--source", required=True, help="源文件路径")
     parser.add_argument("--out", default="out/result.json", help="结果输出路径")
-    parser.add_argument("--problems", default="problems", help="题目目录")
+    parser.add_argument("--problems", default="problems", help="题目根目录")
     parser.add_argument("--allow-network", action="store_true",
                         help="允许网络访问（默认断网）")
 
