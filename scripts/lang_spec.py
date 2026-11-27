@@ -1,7 +1,7 @@
 """
 语言配置模块
 定义各语言的编译命令、运行命令、文件扩展名等。
-compile_cmd 使用模板占位符 {src} 和 {bin}，由 judge.py 替换。
+compile_cmd 使用模板占位符 {src} 和 {bin}，由 run_tests.py 替换。
 """
 
 SUPPORTED = {

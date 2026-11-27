@@ -89,7 +89,7 @@ jobs:
           LANG_TYPE: ${{ github.event.client_payload.lang }}
         run: |
           set -euo pipefail
-          python scripts/judge.py \
+          python scripts/run_tests.py \
             --lang "$LANG_TYPE" \
             --task "$TASK" \
             --source "$SOURCE_FILE" \

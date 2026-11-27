@@ -23,7 +23,7 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
-from lang_config import (
+from lang_spec import (
     SUPPORTED,
     DEFAULT_TLE_MS,
     DEFAULT_ML_MB,
@@ -259,7 +259,7 @@ def run_one(
     if conf is None:
         return {
             "stdout": b"",
-            "stderr": b"不支持的语言",
+            "stderr": "不支持的语言".encode("utf-8"),
             "exit_code": -1,
             "signal": 0,
             "time_ms": 0,
