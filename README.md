@@ -5,6 +5,10 @@
 
 支持语言：**C++17**、**Python 3**。
 
+[OJ客户端开发者从此处开始阅读](#jump)
+
+最近一次运行：[![Judge](https://github.com/QWCIF/qwoi/actions/workflows/judge.yml/badge.svg)](https://github.com/QWCIF/qwoi/actions/workflows/judge.yml)
+
 ---
 
 ## 目录结构
@@ -353,7 +357,7 @@ gh run list --repo <owner>/qwoi --workflow judge.yml --limit 1
 
 ---
 
-## 判定结果
+## 判定结果<a id="jump"></a>
 
 ### verdict 一览
 
