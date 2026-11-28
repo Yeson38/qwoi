@@ -3,7 +3,7 @@
 基于 GitHub Actions 的在线评测（Online Judge）。提交通过 `repository_dispatch` 触发，
 在干净的 Ubuntu runner 上编译、断网运行、比对输出，并把结构化结果写进 `result.json`。
 
-支持语言：**C++17**、**Python 3**。
+支持语言：**C++14**、**Python 3**。
 
 [OJ客户端开发者从此处开始阅读](#jump)
 
