@@ -378,8 +378,9 @@ def run_one(
         elif sig == signal.SIGKILL:
             # 被 OOM killer 杀掉时只可能是内存问题
             verdict = "MLE"
-        elif _looks_like_oom(r.stderr):
-            # RLIMIT_AS 触发的是 bad_alloc / MemoryError / SIGABRT，不是 SIGKILL
+        elif exit_code != 0 and _looks_like_oom(r.stderr):
+            # RLIMIT_AS 触发的是 bad_alloc / MemoryError / SIGABRT，不是 SIGKILL。
+            # 必须同时是非正常退出，否则正常结束的程序只要 stderr 提到 bad_alloc 就会被误判。
             verdict = "MLE"
         elif sig != 0:
             verdict = "RE"
@@ -554,10 +555,18 @@ def judge(
                 stdin_data = f.read()
 
             # 读取期望输出（不存在则视为空答案）
+            # 用二进制读 + 宽松解码：非 UTF-8 的答案（如 GBK）不会让整个评测崩溃
             want = ""
             if os.path.exists(ans_path):
-                with open(ans_path, "r", encoding="utf-8") as f:
-                    want = f.read()
+                with open(ans_path, "rb") as f:
+                    raw_ans = f.read()
+                try:
+                    want = raw_ans.decode("utf-8")
+                except UnicodeDecodeError:
+                    want = raw_ans.decode("utf-8", "replace")
+                    result["warnings"].append(
+                        f"答案文件 {test_name}.ans 不是合法 UTF-8，已按替换字符比较"
+                    )
 
             # 运行
             run_result = run_one(
@@ -580,7 +589,15 @@ def judge(
             test_score = 0.0
 
             if test_verdict == "OK":
-                got = run_result["stdout"].decode("utf-8", "ignore")
+                # replace 而非 ignore：非法字节必须留下痕迹，否则会被吞成空串而误判 AC
+                raw_out = run_result["stdout"]
+                try:
+                    got = raw_out.decode("utf-8")
+                except UnicodeDecodeError:
+                    got = raw_out.decode("utf-8", "replace")
+                    result["warnings"].append(
+                        f"用例 {test_name} 的输出含非 UTF-8 字节，已按替换字符比较"
+                    )
                 if compare_output(got, want, compare_mode):
                     test_verdict = "AC"
                     test_score = per_test_score
