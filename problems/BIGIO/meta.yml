@@ -1,0 +1,7 @@
+title: 大输入测试
+points: 100
+compare: token
+limits:
+  cpp:
+    tle_ms: 3000
+    ml_mb: 512

@@ -1,0 +1,8 @@
+title: 编译超时测试
+points: 100
+compare: token
+limits:
+  cpp:
+    tle_ms: 1000
+    ml_mb: 512
+    compile_tle: 1
