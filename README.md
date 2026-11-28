@@ -222,6 +222,138 @@ nproc: 0        # 不限制进程/线程
 
 ---
 
+## 新增一道题
+
+下面以题目 `SUM`（读入 `n` 和 `n` 个整数，输出它们的和）为例，走一遍完整流程。
+
+### 1. 建目录
+
+题目必须放在 **语言目录** 下：`problems/<lang>/<TASK>/`，`<lang>` 取 `lang_spec.SUPPORTED` 的键
+（当前为 `cpp` / `py`），`<TASK>` 只能用 `[A-Za-z0-9_-]`。
+
+```bash
+mkdir -p problems/cpp/SUM/tests
+mkdir -p problems/py/SUM/tests     # Python 要单独评就建；不需要就跳过
+```
+
+两套目录里的用例可以完全一样（内容重复很少），也可以分别定制。
+不想重复时把用例放共用的 `problems/SUM/tests/`，评测器在两处都找不到语言目录时会自动回退，
+并在 `warnings` 里提示“已回退到共用目录”。
+
+### 2. 放用例
+
+```
+problems/cpp/SUM/tests/
+├── 1.in      # 输入
+├── 1.ans     # 期望输出
+├── 2.in
+└── 2.ans
+```
+
+```bash
+cat > problems/cpp/SUM/tests/1.in <<'EOF'
+5
+1 2 3 4 5
+EOF
+cat > problems/cpp/SUM/tests/1.ans <<'EOF'
+15
+EOF
+
+printf '3\n-1 0 1\n'   > problems/cpp/SUM/tests/2.in
+printf '0\n'            > problems/cpp/SUM/tests/2.ans
+```
+
+规则：
+
+- 只看 `*.in`，同名 `.ans` 是期望输出（**缺失 = 空答案**，容易误判 `AC`，正式题务必建）。
+- 用例顺序是 **文件名字典序**（`sorted()`），所以 `1, 10, 2, 3` 会按 `1, 10, 2, 3` 执行。
+  想按数字顺序就补零：`01.in` `02.in` `10.in`；文件后缀不是 `.in` 的会被忽略。
+- 默认遇到第一个非 `AC` 用例就停，后面的不跑、不计分。
+- 每题至少一个 `.in`，否则 `IE: 没有找到测试用例`。
+
+### 3. 写 `meta.yml`（可选）
+
+最小可用版本是什么都不写（全靠语言默认：C++ 1s / 256MB，Python 2s / 256MB）。推荐至少写清限制：
+
+```yaml
+# problems/cpp/SUM/meta.yml
+title: 序列求和
+points: 100
+compare: line_by_line
+limits:
+  cpp:
+    tle_ms: 1000
+    ml_mb: 512
+```
+
+各键含义见 [meta.yml 支持的键](#metayml-支持的键)，优先级见 [配置系统](#配置系统)。
+两道常见选择：
+
+- 输出可能有多种合法写法 → 用 `token`（按空白切词比较）或 `line_by_line`。
+- 想卡 Python 常数 → 给 `py` 单独放大 `tle_ms`，别把全局值调成两者都不合理。
+
+### 4. 本地验证
+
+```bash
+# 选手答案
+cat > /tmp/sum.cpp <<'EOF'
+#include <bits/stdc++.h>
+int main() {
+    long long n, x, s = 0;
+    std::cin >> n;
+    for (int i = 0; i < n; i++) { std::cin >> x; s += x; }
+    std::cout << s << "\n";
+}
+EOF
+
+# 跑一次
+python scripts/run_tests.py --lang cpp --task SUM --player alice \
+  --source /tmp/sum.cpp --out out/sum.json
+```
+
+看三件事：`verdict` 是不是 `AC`；`limits` 回显的是不是你写的值（优先级没写错）；
+`tests[*].time_ms` 离 `tle_ms` 远不远。
+
+Python 也走一遍（同一题得在 `problems/py/SUM/` 也有目录）：
+
+```bash
+printf 'import sys\nd=sys.stdin.read().split()\nn=int(d[0])\nprint(sum(int(x) for x in d[1:1+n]))\n' > /tmp/sum.py
+python scripts/run_tests.py --lang py --task SUM --player alice \
+  --source /tmp/sum.py --out out/sum_py.json
+```
+
+再用错答案确认用例真能判错（否则可能是 `.ans` 没写或比对过宽）：
+
+```bash
+echo 'int main(){}' > /tmp/wrong.cpp
+python scripts/run_tests.py --lang cpp --task SUM --player bob \
+  --source /tmp/wrong.cpp --out out/wrong.json   # 期望 WA
+```
+
+### 5. 提交到线上触发一次
+
+```bash
+SRC=$(base64 -w0 /tmp/sum.cpp)
+cat > p.json <<EOF
+{"event_type":"judge","client_payload":{"lang":"cpp","task":"SUM","player":"alice","source_content":"$SRC"}}
+EOF
+gh api repos/<owner>/qwoi/dispatches --method POST --input p.json
+gh run list --repo <owner>/qwoi --workflow judge.yml --limit 1
+```
+
+下载产物并核对 `result.json`，见 [获取评测结果的所有方式](#获取评测结果的所有方式)。
+
+### 检查清单
+
+- [ ] 目录是 `problems/<lang>/<TASK>/tests/`，不是 `problems/<TASK>/data/`
+- [ ] 每个 `N.in` 都有 `N.ans`（空答案会误判 `AC`）
+- [ ] 用例名位数统一（`01/02/10`），避免字典序打乱顺序
+- [ ] `meta.yml` 里的语言键与 `SUPPORTED` 一致（`cpp` / `py`，不是 `c++`）
+- [ ] 本地用错误答案跑出过 `WA`，确认判题真的在检查输出
+- [ ] 本地 `limits` 回显与预期一致；CI 上再跑一次确认（本地没有 `unshare` 时是降级模式）
+
+---
+
 ## 判定结果
 
 ### verdict 一览
