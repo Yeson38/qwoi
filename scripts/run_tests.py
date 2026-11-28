@@ -7,7 +7,7 @@ OJ 评测脚本
 如果 unshare 不可用，会降级为无断网模式并在结果中记录警告。
 
 配置优先级（高 → 低）：
-  1. 题目配置：problems/<TASK>/meta.yml
+  1. 题目配置：problems/<lang>/<TASK>/meta.yml（或共用目录 problems/<TASK>/meta.yml）
         limits.<lang>.<key>  →  <key>.<lang>  →  <key>
   2. 语言配置：scripts/lang_spec.py 中 SUPPORTED[lang]["limits"]
   3. 代码保底：lang_spec.py 末尾的 DEFAULT_* 常量
@@ -470,11 +470,19 @@ def judge(
         _write_result(result, out_path)
         return
 
-    # 题目目录
-    task_dir = os.path.join(problems_dir, task)
-    if not os.path.isdir(task_dir):
+    # 题目目录：优先 problems/<lang>/<task>，没有再退回 problems/<task>（多语言共用测试数据）
+    lang_task_dir = os.path.join(problems_dir, lang, task)
+    shared_task_dir = os.path.join(problems_dir, task)
+    if os.path.isdir(lang_task_dir):
+        task_dir = lang_task_dir
+    elif os.path.isdir(shared_task_dir):
+        task_dir = shared_task_dir
+        result["warnings"].append(
+            f"题目目录 {lang_task_dir} 不存在，已回退到共用目录 {shared_task_dir}"
+        )
+    else:
         result["verdict"] = "IE"
-        result["compile_msg"] = f"题目目录不存在: {task_dir}"
+        result["compile_msg"] = f"题目目录不存在: {lang_task_dir}"
         _write_result(result, out_path)
         return
 
@@ -648,7 +656,8 @@ def main():
     parser = argparse.ArgumentParser(description="OJ 评测脚本")
     parser.add_argument("--lang", required=True, choices=list(SUPPORTED.keys()),
                         help="语言: cpp / py")
-    parser.add_argument("--task", required=True, help="题目名（problems/ 下的目录名）")
+    parser.add_argument("--task", required=True,
+                        help="题目名：problems/<lang>/<task>，与语言无关的题可放 problems/<task>")
     parser.add_argument("--player", required=True, help="选手名（仅字母数字下划线短横线）")
     parser.add_argument("--source", required=True, help="源文件路径")
     parser.add_argument("--out", default="out/result.json", help="结果输出路径")

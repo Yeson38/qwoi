@@ -3,7 +3,8 @@
 定义各语言的编译命令、运行命令、文件扩展名、默认资源限制。
 
 配置优先级（高 → 低）：
-  1. 题目配置  problems/<TASK>/meta.yml
+  1. 题目配置  problems/<lang>/<TASK>/meta.yml
+               （该语言目录不存在时回退到共用目录 problems/<TASK>/meta.yml）
   2. 语言配置  本文件 SUPPORTED[lang]["limits"]
   3. 代码保底  本文件末尾的 DEFAULT_* 常量
 

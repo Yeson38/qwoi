@@ -1,0 +1,7 @@
+title: 序列求和
+points: 100
+limits:
+  cpp:
+    tle_ms: 1000
+    ml_mb: 512
+compare: line_by_line

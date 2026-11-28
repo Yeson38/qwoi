@@ -13,11 +13,15 @@
 .
 ├── .github/workflows/judge.yml   # CI 工作流：准备源码 → 启用隔离 → 评测 → 上传/评论/摘要
 ├── problems/
-│   └── <TASK>/                   # 题目目录，目录名即 task 名（[A-Za-z0-9_-]）
-│       ├── meta.yml              # 题目配置（可选）
-│       └── tests/
-│           ├── 1.in              # 输入
-│           └── 1.ans             # 期望输出（缺失 = 空答案）
+│   ├── cpp/                      # 语言目录（与 lang_spec.SUPPORTED 的 key 一致）
+│   │   └── <TASK>/               # 题目目录，目录名即 task 名（[A-Za-z0-9_-]）
+│   │       ├── meta.yml          # 题目配置（可选）
+│   │       └── tests/
+│   │           ├── 1.in          # 输入
+│   │           └── 1.ans         # 期望输出（缺失 = 空答案）
+│   ├── py/
+│   │   └── <TASK>/               # 同上
+│   └── <TASK>/                   # 可选：多语言共用同一套数据的题，优先级低于语言目录
 ├── scripts/
 │   ├── run_tests.py              # 评测器 CLI
 │   └── lang_spec.py              # 语言配置：编译/运行命令 + 语言级默认限制
@@ -92,7 +96,7 @@ python scripts/run_tests.py --lang cpp --task TEST --player alice \
 | 参数 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `--lang` | ✅ | — | `cpp` 或 `py`（取自 `lang_spec.SUPPORTED`） |
-| `--task` | ✅ | — | `problems/` 下的题目目录名，`[A-Za-z0-9_-]` |
+| `--task` | ✅ | — | 题目名，`[A-Za-z0-9_-]`；解析为 `problems/<lang>/<task>`，不存在时回退到 `problems/<task>` |
 | `--player` | ✅ | — | 选手名，`[A-Za-z0-9_-]` |
 | `--source` | ✅ | — | 提交源码路径 |
 | `--out` | ❌ | `out/result.json` | 结果 JSON 输出路径（目录会自动创建） |
@@ -115,7 +119,7 @@ python scripts/run_tests.py --help
 
 | 层级 | 位置 | 说明 |
 | --- | --- | --- |
-| 1（最高） | `problems/<TASK>/meta.yml` | 题目配置。语言专属写法 > 全局写法 |
+| 1（最高） | `problems/<lang>/<TASK>/meta.yml`（回退 `problems/<TASK>/meta.yml`） | 题目配置。语言专属写法 > 全局写法 |
 | 2 | `scripts/lang_spec.py` → `SUPPORTED[lang]["limits"]` | 语言级默认值 |
 | 3（最低） | `scripts/lang_spec.py` 末尾 `DEFAULT_*` | 代码保底，缺失 `meta.yml` 或未安装 pyyaml 时生效 |
 
@@ -694,8 +698,9 @@ gh api repos/<owner>/<repo>/actions/workflows/judge.yml/runs
 
 | 症状 | 排查 |
 | --- | --- |
-| `IE: 题目目录不存在` | `--task` 与 `problems/` 下目录名是否一致（大小写敏感） |
-| `IE: 测试用例目录不存在` | 需要 `problems/<TASK>/tests/`，不是 `data/` |
+| `IE: 题目目录不存在` | 检查 `problems/<lang>/<TASK>/`（或共用的 `problems/<TASK>/`），大小写敏感；报错信息里有完整路径 |
+| `IE: 测试用例目录不存在` | 需要 `problems/<lang>/<TASK>/tests/`，不是 `data/` |
+| 警告“已回退到共用目录” | 该语言目录下没有这个题，用的是 `problems/<TASK>` 的共用数据 |
 | `IE: 没有找到测试用例` | `tests/` 里没有 `*.in` |
 | `CE` 但本地能编译 | 线上用 `g++ -std=c++17 -O2`；检查是否用了本地扩展/更高标准 |
 | 结果里 `limits` 和预期不符 | 按 [优先级](#优先级) 检查：`limits.<lang>` → 全局键 → 语言默认 |
