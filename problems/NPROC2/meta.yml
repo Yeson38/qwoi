@@ -4,5 +4,5 @@ compare: token
 limits:
   cpp:
     tle_ms: 2000
-    ml_mb: 512
+    ml_mb: 0
     nproc: 512
