@@ -49,7 +49,7 @@
 ### 本地评测
 
 ```bash
-# 1) 依赖（仅 C++ 之外的配置解析需要 pyyaml；缺了会忽略 meta.yml）
+# 1) 依赖：解析 meta.yml 需要 pyyaml（所有语言都一样；缺了会忽略 meta.yml）
 pip install pyyaml
 
 # 2) 准备一份源码
