@@ -567,14 +567,31 @@ Postman / Insomnia / 自建后端 / 另一个 Actions 工作流，只要能发 H
 
 ### Token 权限
 
-| Token 类型 | 需要的权限 |
-| --- | --- |
-| Fine-grained PAT | **Contents: Read and write**（触发 dispatch） |
-| Fine-grained PAT（要推送改 workflow） | 额外 **Workflows: Read and write** |
-| Classic PAT / OAuth | `repo` |
+这里说的是**你自己调用 API 用的 token**（不是工作流内部的 `GITHUB_TOKEN`）。按要做的事选权限：
 
-> 注意：`git push` 包含 `.github/workflows/` 下文件的改动时，GitHub 要求 token 带
-> `Workflows` 权限，否则整个 push 会被拒绝。
+| 要做的事 | Fine-grained PAT | Classic PAT |
+| --- | --- | --- |
+| 触发评测（`POST /dispatches`） | **Contents: Read and write** | `repo`（私有库）/ `public_repo`（公开库） |
+| 查看运行、下载 artifact（`GET /actions/runs`、`/artifacts`） | **Actions: Read-only** | 同上 |
+| 取消 / 重跑运行（`POST /actions/runs/{id}/rerun`、`/cancel`） | **Actions: Read and write** | `repo` |
+| `workflow_dispatch` 手动触发 | **Actions: Read and write** | `repo` + `workflow` |
+| 推送到 `.github/workflows/` 下的文件 | **Workflows: Read and write** | `repo` + `workflow` |
+| 在 issue 里回填结果 | **Issues: Read and write** | `repo` / `public_repo` |
+
+**最小可用组合**（只触发 + 取结果）：
+
+- Fine-grained：`Contents: Read and write` + `Actions: Read-only`，Repository access 选这个仓库。
+- Classic：只勾 `repo`（公开库用 `public_repo` 就够）。
+
+要顺手改并推送 `judge.yml` 的话，Fine-grained 再加 `Workflows: Read and write`，Classic 再加 `workflow`，
+否则整个 push 会被拒绝（`refusing to allow ... without workflow scope`）。
+
+`gh` CLI 用的是 `gh auth login` 拿到的 OAuth token，`gh auth status` 能看当前带的 scope；
+缺权限时补授权：`gh auth refresh -s workflow`。
+
+> 工作流里用的是 `GITHUB_TOKEN`，权限由 `judge.yml` 的 `permissions:` 声明
+> （`contents: read` + `actions: write` + `issues: write`）。它只在那次运行内有效，
+> 也不能用来在自己的脚本里发 `repository_dispatch`。
 
 ### 触发后如何定位这次运行
 
