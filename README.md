@@ -273,7 +273,7 @@ printf '0\n'            > problems/cpp/SUM/tests/2.ans
 
 ### 3. 写 `meta.yml`（可选）
 
-最小可用版本是什么都不写（全靠语言默认：C++ 1s / 256MB，Python 2s / 256MB）。推荐至少写清限制：
+最小可用版本是什么都不写（全靠语言默认：`cpp` / `py` 都是 1s / 256MB，`points` 100，`compare` `normalize`）。推荐至少写清限制：
 
 ```yaml
 # problems/cpp/SUM/meta.yml
@@ -286,11 +286,10 @@ limits:
     ml_mb: 512
 ```
 
-各键含义见 [meta.yml 支持的键](#metayml-支持的键)，优先级见 [配置系统](#配置系统)。
-两道常见选择：
+各键含义见 [meta.yml 支持的键](#metayml-支持的键)，优先级见 [配置系统](#配置系统)。两个常见选择：
 
 - 输出可能有多种合法写法 → 用 `token`（按空白切词比较）或 `line_by_line`。
-- 想卡 Python 常数 → 给 `py` 单独放大 `tle_ms`，别把全局值调成两者都不合理。
+- Python 常数太紧 → 在 `limits.py` 下单独放大 `tle_ms`，而不是把全局值调到两者都离谱。
 
 ### 4. 本地验证
 
@@ -398,8 +397,9 @@ gh run list --repo <owner>/qwoi --workflow judge.yml --limit 1
 ### 内存判定细节
 
 `RLIMIT_AS` 超限时进程通常拿到 `std::bad_alloc`（C++）或 `MemoryError`（Python），
-表现为 `SIGABRT` 或非零退出，**不是** `SIGKILL`。评测器对这两种情况都会判成 `MLE`，
-不会误报成 `RE`。
+表现为 `SIGABRT` 或非零退出；被内核 OOM killer 选中时则是 `SIGKILL`。
+两种情况都判 `MLE`，不会误报成 `RE`；判定 `MLE` 要求进程非正常退出，
+正常结束只在 stderr 里提到这些词不会被误判。
 
 ### 输出比对
 
@@ -428,7 +428,9 @@ gh run list --repo <owner>/qwoi --workflow judge.yml --limit 1
 | 核心转储 | `RLIMIT_CORE` | 0 | 固定关闭 |
 
 > 系统默认不额外限制进程数，因此 `std::thread`、`multiprocessing`、`fork` 都能正常使用；
-> 需要防 fork 炸弹时在题目配置里设 `nproc`（例如 `nproc: 64`）。
+> 需要防 fork 炸弹时在题目配置里设 `nproc`，但要设得足够大（建议 ≥ 256）：`RLIMIT_NPROC`
+> 统计的是 **整个 UID 已有的进程数**，设成个位数会连求解程序自己的线程一起锁死，实测见
+> [实测能力边界](#进程与文件)。
 
 ### 断网
 
@@ -738,6 +740,8 @@ gh api repos/<owner>/<repo>/actions/workflows/judge.yml/runs
 | Windows 本地跑出 `IE` | `preexec_fn` 不可用（POSIX only） |
 | 中文警告在 Windows 控制台乱码 | 控制台代码页问题，不影响 `result.json`（UTF-8） |
 | `unshare` 不可用时只警告 | `network_disabled: false` + `warnings` 说明；CI 里已用前置步骤强制可断网 |
+| 整个 job 15 分钟超时 | `timeout-minutes: 15`；用例过多或程序卡在无法杀掉的状态时会在这里被截断 |
+| 子进程只能看到有限的环境变量 | `_clean_env()` 只给 `PATH` / `HOME=TMPDIR=工作目录` / `LANG=C.UTF-8` 等，不继承 `GITHUB_TOKEN` 之类的变量 |
 
 ---
 

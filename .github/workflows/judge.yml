@@ -8,6 +8,7 @@ on:
 permissions:
   contents: read
   actions: write
+  issues: write        # Comment result 步骤需要
 
 concurrency:
   group: judge-${{ github.event.client_payload.submission_id || github.run_id }}
