@@ -509,7 +509,7 @@ curl -X POST \
 
 ```powershell
 $token  = "github_pat_xxx"
-$repo   = "Yeson38/qwoi"
+$repo   = "QWCIF/qwoi"
 $code   = Get-Content -Raw -Encoding UTF8 .\main.cpp
 $b64    = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($code))
 
