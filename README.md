@@ -574,12 +574,98 @@ gh api repos/<owner>/<repo>/actions/workflows/judge.yml/runs
 | `.ans` 缺失 → 按空答案比对 | 不报错，避免用例未准备好时整体 IE |
 | 一个用例失败即中止 | 见上，`break` 可改 `continue` |
 | `sleep` 也会 `TLE` | wall clock 判定生效，不再只看 CPU |
-| 内存超限是 `MLE` 而非 `RE` | 通过 stderr 特征识别 `bad_alloc`/`MemoryError` |
-| 程序可以开线程/子进程 | 默认 `nproc: 0` 不限制；需要时在题目里设 |
+| 内存超限是 `MLE` 而非 `RE` | 通过 stderr 特征识别 `bad_alloc`/`MemoryError`，且要求进程非正常退出；正常退出只在 stderr 里提到这些词不会被误判 |
+| 答案/输出不是合法 UTF-8 | 按替换字符比较并写进 `warnings`，既不会让评测崩溃，也不会把乱码吞成空串而误判 `AC` |
+| 程序可以开线程/子进程 | 默认 `nproc: 0` 不限制；需要时在题目里设，注意下面的 per-UID 说明 |
 | 写盘默认不限制 | `fsize_mb: 0`；共享 runner 资源有限，正式题建议设一个上限 |
 | Windows 本地跑出 `IE` | `preexec_fn` 不可用（POSIX only） |
 | 中文警告在 Windows 控制台乱码 | 控制台代码页问题，不影响 `result.json`（UTF-8） |
 | `unshare` 不可用时只警告 | `network_disabled: false` + `warnings` 说明；CI 里已用前置步骤强制可断网 |
+
+---
+
+## 实测能力边界
+
+下面的数字都是在 `ubuntu-latest`（4 vCPU / 16 GB）上跑 `repository_dispatch` 实测得到的，
+不是理论值。题目侧的限制都可以按 [配置优先级](#配置系统) 覆盖。
+
+### 时间
+
+| 场景 | 结果 |
+| --- | --- |
+| `sleep(0.95s)`，限制 1000 ms | `AC`，`time_ms = 954` |
+| `sleep(0.99s)`，限制 1000 ms | `AC`，`time_ms = 1000`（判定用 `elapsed > tle_ms`，恰好等于限制算过） |
+| `sleep(1.0s)`，限制 1000 ms | `TLE`，`time_ms ≈ 1004~1009` |
+| 每秒约 1e9 次空循环，限制 1000 ms | `TLE`，`time_ms ≈ 1064` |
+| 每个用例的计时 | 从 `fork/exec` 到进程退出的 wall clock，含 `unshare` 启动开销约 5~10 ms |
+
+### 内存
+
+`ml_mb` 是 **虚拟地址空间** 上限（`RLIMIT_AS`），程序本身的代码段和动态库都算在内，
+所以实际可用的堆比 `ml_mb` 略小。
+
+| 场景（`ml_mb: 512`） | 结果 |
+| --- | --- |
+| `vector` 申请 480 MB 并逐页触碰 | 通过（`WA` 只是因为输出不对），`time_ms ≈ 244` |
+| `vector` 申请 512 MB 并逐页触碰 | `MLE`（`SIGABRT`，stderr 有 `bad_alloc`） |
+| `vector` 申请 600 MB | `MLE`，`time_ms ≈ 50` |
+| Python `bytearray(600 MB)` | `MLE`（`MemoryError` 或 `SIGKILL` 都能识别） |
+| 多线程 | **线程栈也计入**：默认 8 MB/线程，`ml_mb: 512` 时约 50 个线程会撞上限；要开很多线程请调大 `ml_mb` 或直接用 `ml_mb: 0` |
+
+### 进程与文件
+
+| 场景 | 结果 |
+| --- | --- |
+| `nproc: 0`（默认）+ `std::thread` / `fork` | 正常，可以随意开 |
+| `nproc: 8` + 50 线程 | **一个都建不起来**：`RLIMIT_NPROC` 是 **整个 UID 的进程/线程总数**，runner 上该 UID 已有进程，余量不够 |
+| `nproc: 512` + 50 线程（`ml_mb: 0`） | 正常，50 个线程全建成 |
+| `fsize_mb: 0`（默认）写 30 MB 文件 | 成功 |
+| `fsize_mb: 1` 写 2 MB 文件 | `SIGXFSZ`（25）→ `RE`，`time_ms ≈ 97` |
+
+> 结论：`nproc` 要限制就设一个明显大于 runner 已有进程数的值（如 256/512），
+> 设成个位数会把求解程序一起锁死。
+
+### 输入输出与比对
+
+| 场景 | 结果 |
+| --- | --- |
+| 108 KB 的 `1.in`（两万个整数） | `AC`，`time_ms ≈ 7`（`subprocess` 并发读写，不会死锁） |
+| 8.4 MB stdout | 正常比对，`WA`，`time_ms ≈ 21`（输出全量捕获在内存里） |
+| 64 MB stdout | `WA`，`time_ms ≈ 90` |
+| 100 字节 `0xFF` 的非法 UTF-8 输出 | `WA` + `warnings`（旧版本会 `ignore` 成空串而误判 `AC`） |
+| `.ans` 是非 UTF-8（如 GBK） | 按替换字符比对 + `warnings`（旧版本会直接崩掉整个评测，连 `result.json` 都不产出） |
+| 输出 `3\r\n`、答案 `3\n` | `line_by_line` / `normalize` 都判 `AC`（`splitlines` 吃掉 `\r`） |
+| 输出前后带多余空格/空行 | `line_by_line`/`normalize`/`token` 都容忍；`full` 不容忍 |
+| `.ans` 缺失 | 按空答案；程序无输出 → `AC`，有输出 → `WA` |
+| 空 `.ans` + 空输出 | `AC`（故意留空样例时就会这样） |
+
+### 状态与信号
+
+| 程序行为 | 判定 | `signal` |
+| --- | --- | --- |
+| 空指针解引用 | `RE` | 11 |
+| 无限递归爆栈 | `RE` | 11 |
+| `exit(42)` | `RE` | 0（`exit_code = 42`） |
+| `raise(SIGKILL)` / OOM killer | `MLE` | 9 |
+| `SIGXCPU`（CPU 时间到） | `TLE` | 24 |
+| 输出里带 `bad_alloc` 但正常 `return 0` | `AC`（不再误判 `MLE`） |
+
+### 多用例与编译
+
+| 场景 | 结果 |
+| --- | --- |
+| 4 个用例、`points: 90` | 每个 22.5 分，`score` 累加，`total_score` 仍是 90 |
+| 第 2 个用例答案错 | `WA`，`score = 22.5`，`tests` 里只有前 2 条（遇到失败即停） |
+| 用例文件 `1.in 2.in 3.in 10.in` | 执行顺序是 **字典序** `1, 10, 2, 3`（按文件名排序，不是按数值） |
+| `compile_tle: 1` + `#include <bits/stdc++.h>` | `CE`，`compile_msg: 编译超时` |
+| `#include <bits/stdc++.h>` 正常编译 | 约 1.5~2 s，默认 `compile_tle: 30` 很宽裕 |
+
+### 进程树
+
+| 场景 | 结果 |
+| --- | --- |
+| 程序 `fork` 后父进程立刻退出，子进程 `sleep(120)` 且持有 stdout | 评测仍在 `time_ms ≈ 1008` 返回 `TLE`，**不会被孤儿进程拖住** |
+| 说明 | 超时只对直接子进程发 `SIGKILL`（也不建进程组），孤儿进程不会回收但已无法影响本次判定；正式题请避免依赖子进程行为 |
 
 ---
 

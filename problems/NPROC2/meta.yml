@@ -1,8 +1,0 @@
-title: 进程数限制可容纳线程测试
-points: 100
-compare: token
-limits:
-  cpp:
-    tle_ms: 2000
-    ml_mb: 0
-    nproc: 512

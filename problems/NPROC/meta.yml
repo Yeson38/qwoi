@@ -1,8 +1,0 @@
-title: 进程数限制生效测试
-points: 100
-compare: token
-limits:
-  cpp:
-    tle_ms: 2000
-    ml_mb: 512
-    nproc: 8
